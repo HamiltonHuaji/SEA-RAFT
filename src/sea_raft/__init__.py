@@ -1,27 +1,60 @@
+"""
+Usage:
+
+```python
+from sea_raft import RAFTArgs, RAFT
+
+raft_url = "MemorySlices/Tartan-C-T-TSKH-spring540x960-M"
+raft_args = RAFTArgs.from_pretrained(raft_url)
+raft = RAFT.from_pretrained(raft_url, args=raft_args).to('cuda')
+
+a = torch.rand((1, 3, 640, 960)).to('cuda')
+b = torch.rand((1, 3, 640, 960)).to('cuda')
+assert raft(a, b, iters=20, test_mode=True)['final'].shape == torch.Size([1, 2, 640, 960])
+```
+"""
+
 import numpy as np
 import torch
 import math
+import json
 import torch.nn as nn
 import torch.nn.functional as F
+from pathlib import Path
 
-from update import BasicUpdateBlock
-from corr import CorrBlock
-from utils.utils import coords_grid, InputPadder
-from extractor import ResNetFPN
-from layer import conv1x1, conv3x3
+from .update import BasicUpdateBlock
+from .corr import CorrBlock
+from .utils.utils import coords_grid, InputPadder
+from .extractor import ResNetFPN
+from .layer import conv1x1, conv3x3
 
 from huggingface_hub import PyTorchModelHubMixin
 
+class RAFTArgs:
+    @classmethod
+    def from_pretrained(cls, pretrained_model_name_or_path, **kwargs):
+        instance = cls()
+        config_path = pretrained_model_name_or_path.split("/")[-1] + ".json"
+        config_path = Path(__file__).parent / "configs" / config_path
+        with open(config_path, "r") as f:
+            config = json.load(f)
+        for key, value in config.items():
+            setattr(instance, key, value)
+        for key, value in kwargs.items():
+            setattr(instance, key, value)
+        return instance
+
 class RAFT(
     nn.Module,
-    PyTorchModelHubMixin, 
+    PyTorchModelHubMixin,
     # optionally, you can add metadata which gets pushed to the model card
     repo_url="https://github.com/princeton-vl/SEA-RAFT",
     pipeline_tag="optical-flow-estimation",
     license="bsd-3-clause",
 ):
-    def __init__(self, args):
+    def __init__(self, args=None):
         super().__init__()
+
         self.args = args
         self.output_dim = args.dim * 2
         
@@ -145,7 +178,7 @@ class RAFT(
                 raw_b = info_predictions[i][:, 2:]
                 log_b = torch.zeros_like(raw_b)
                 weight = info_predictions[i][:, :2]
-                # Large b Component                
+                # Large b Component
                 log_b[:, 0] = torch.clamp(raw_b[:, 0], min=0, max=var_max)
                 # Small b Component
                 log_b[:, 1] = torch.clamp(raw_b[:, 1], min=var_min, max=0)

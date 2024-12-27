@@ -1,5 +1,5 @@
 import sys
-sys.path.append('core')
+sys.path.append('src/sea_raft')
 import argparse
 import os
 import cv2
@@ -14,9 +14,9 @@ import torch.utils.data as data
 from config.parser import parse_args
 
 import datasets
-from raft import RAFT
-from utils.flow_viz import flow_to_image
-from utils.utils import load_ckpt
+from sea_raft import RAFT
+from sea_raft.utils.flow_viz import flow_to_image
+from sea_raft.utils.utils import load_ckpt
 
 def create_color_bar(height, width, color_map):
     """
@@ -127,6 +127,7 @@ def main():
         model = RAFT(args)
         load_ckpt(model, args.path)
     else:
+        print(args)
         model = RAFT.from_pretrained(args.url, args=args)
         
     if args.device == 'cuda':
