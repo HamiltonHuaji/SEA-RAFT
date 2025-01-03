@@ -29,6 +29,7 @@ from .extractor import ResNetFPN
 from .layer import conv1x1, conv3x3
 
 from huggingface_hub import PyTorchModelHubMixin
+from einops import *
 
 class RAFTArgs:
     @classmethod
@@ -106,8 +107,19 @@ class RAFT(
         
         return up_flow.reshape(N, 2, 8*H, 8*W), up_info.reshape(N, C, 8*H, 8*W)
 
-    def forward(self, image1, image2, iters=None, flow_gt=None, test_mode=False):
+    def forward(self, image1, image2, iters=None, flow_gt=None, test_mode=False, dim_indexing="b c h w"):
         """ Estimate optical flow between pair of frames """
+
+        if image1.ndim == 3:
+            image1 = image1.unsqueeze(0) # add batch dimension
+        
+        if image2.ndim == 3:
+            image2 = image2.unsqueeze(0) # add batch dimension
+
+        if dim_indexing != "b c h w":
+            image1 = rearrange(image1, f"{dim_indexing} -> b c h w")
+            image2 = rearrange(image2, f"{dim_indexing} -> b c h w")
+
         N, _, H, W = image1.shape
         if iters is None:
             iters = self.args.iters
