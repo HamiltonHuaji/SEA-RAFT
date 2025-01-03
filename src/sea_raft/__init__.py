@@ -107,7 +107,7 @@ class RAFT(
         
         return up_flow.reshape(N, 2, 8*H, 8*W), up_info.reshape(N, C, 8*H, 8*W)
 
-    def forward(self, image1, image2, iters=None, flow_gt=None, test_mode=False, dim_indexing="b c h w"):
+    def forward(self, image1, image2, iters=None, flow_gt=None, test_mode=False, dim_indexing="b c h w", mini_batch_size=16):
         """ Estimate optical flow between pair of frames """
 
         if image1.ndim == 3:
@@ -121,8 +121,29 @@ class RAFT(
             image2 = rearrange(image2, f"{dim_indexing} -> b c h w")
 
         N, _, H, W = image1.shape
+
         if iters is None:
             iters = self.args.iters
+
+        if N > mini_batch_size:
+            results = []
+            for i in range(0, N, mini_batch_size):
+                image1_mini = image1[i:i+mini_batch_size]
+                image2_mini = image2[i:i+mini_batch_size]
+                flow_gt_mini = None if flow_gt is None else flow_gt[i:i+mini_batch_size]
+
+                if test_mode:
+                    with torch.inference_mode():
+                        results.append(self(image1_mini, image2_mini, iters=iters, flow_gt=flow_gt_mini, test_mode=test_mode, dim_indexing=dim_indexing, mini_batch_size=mini_batch_size))
+                else:
+                    results.append(self(image1_mini, image2_mini, iters=iters, flow_gt=flow_gt_mini, test_mode=test_mode, dim_indexing=dim_indexing, mini_batch_size=mini_batch_size))
+            return {
+                'final': torch.cat([result['final'] for result in results], dim=0),
+                'flow': [torch.cat([result['flow'][i] for result in results], dim=0) for i in range(iters)],
+                'info': [torch.cat([result['info'][i] for result in results], dim=0) for i in range(iters)],
+                'nf': None if test_mode else [torch.cat([result['nf'][i] for result in results], dim=0) for i in range(iters)]
+            }
+
         if flow_gt is None:
             flow_gt = torch.zeros(N, 2, H, W, device=image1.device)
 
