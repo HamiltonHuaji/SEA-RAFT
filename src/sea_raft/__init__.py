@@ -109,119 +109,115 @@ class RAFT(
 
     def forward(self, image1, image2, iters=None, flow_gt=None, test_mode=False, dim_indexing="b c h w", mini_batch_size=16):
         """ Estimate optical flow between pair of frames """
-
-        if image1.ndim == 3:
-            image1 = image1.unsqueeze(0) # add batch dimension
-        
-        if image2.ndim == 3:
-            image2 = image2.unsqueeze(0) # add batch dimension
-
-        if dim_indexing != "b c h w":
-            image1 = rearrange(image1, f"{dim_indexing} -> b c h w")
-            image2 = rearrange(image2, f"{dim_indexing} -> b c h w")
-
-        N, _, H, W = image1.shape
-
-        if iters is None:
-            iters = self.args.iters
-
-        if N > mini_batch_size:
-            results = []
-            for i in range(0, N, mini_batch_size):
-                image1_mini = image1[i:i+mini_batch_size]
-                image2_mini = image2[i:i+mini_batch_size]
-                flow_gt_mini = None if flow_gt is None else flow_gt[i:i+mini_batch_size]
-
-                if test_mode:
-                    with torch.inference_mode():
-                        results.append(self(image1_mini, image2_mini, iters=iters, flow_gt=flow_gt_mini, test_mode=test_mode, dim_indexing=dim_indexing, mini_batch_size=mini_batch_size))
-                else:
-                    results.append(self(image1_mini, image2_mini, iters=iters, flow_gt=flow_gt_mini, test_mode=test_mode, dim_indexing=dim_indexing, mini_batch_size=mini_batch_size))
-            return {
-                'final': torch.cat([result['final'] for result in results], dim=0),
-                'flow': [torch.cat([result['flow'][i] for result in results], dim=0) for i in range(iters)],
-                'info': [torch.cat([result['info'][i] for result in results], dim=0) for i in range(iters)],
-                'nf': None if test_mode else [torch.cat([result['nf'][i] for result in results], dim=0) for i in range(iters)]
-            }
-
-        if flow_gt is None:
-            flow_gt = torch.zeros(N, 2, H, W, device=image1.device)
-
-        image1 = 2 * (image1 / 255.0) - 1.0
-        image2 = 2 * (image2 / 255.0) - 1.0
-        image1 = image1.contiguous()
-        image2 = image2.contiguous()
-        flow_predictions = []
-        info_predictions = []
-
-        # padding
-        padder = InputPadder(image1.shape)
-        image1, image2 = padder.pad(image1, image2)
-        N, _, H, W = image1.shape
-        dilation = torch.ones(N, 1, H//8, W//8, device=image1.device)
-        # run the context network
-        cnet = self.cnet(torch.cat([image1, image2], dim=1))
-        cnet = self.init_conv(cnet)
-        net, context = torch.split(cnet, [self.args.dim, self.args.dim], dim=1)
-
-        # init flow
-        flow_update = self.flow_head(net)
-        weight_update = .25 * self.upsample_weight(net)
-        flow_8x = flow_update[:, :2]
-        info_8x = flow_update[:, 2:]
-        flow_up, info_up = self.upsample_data(flow_8x, info_8x, weight_update)
-        flow_predictions.append(flow_up)
-        info_predictions.append(info_up)
+        with torch.inference_mode(mode=test_mode):
+            if image1.ndim == 3:
+                image1 = image1.unsqueeze(0) # add batch dimension
             
-        if self.args.iters > 0:
-            # run the feature network
-            fmap1_8x = self.fnet(image1)
-            fmap2_8x = self.fnet(image2)
-            corr_fn = CorrBlock(fmap1_8x, fmap2_8x, self.args)
+            if image2.ndim == 3:
+                image2 = image2.unsqueeze(0) # add batch dimension
 
-        for itr in range(iters):
-            N, _, H, W = flow_8x.shape
-            flow_8x = flow_8x.detach()
-            coords2 = (coords_grid(N, H, W, device=image1.device) + flow_8x).detach()
-            corr = corr_fn(coords2, dilation=dilation)
-            net = self.update_block(net, context, corr, flow_8x)
+            if dim_indexing != "b c h w":
+                image1 = rearrange(image1, f"{dim_indexing} -> b c h w")
+                image2 = rearrange(image2, f"{dim_indexing} -> b c h w")
+
+            N, _, H, W = image1.shape
+
+            if iters is None:
+                iters = self.args.iters
+
+            if N > mini_batch_size:
+                results = []
+                for i in range(0, N, mini_batch_size):
+                    image1_mini = image1[i:i+mini_batch_size]
+                    image2_mini = image2[i:i+mini_batch_size]
+                    flow_gt_mini = None if flow_gt is None else flow_gt[i:i+mini_batch_size]
+
+                    results.append(self(image1_mini, image2_mini, iters=iters, flow_gt=flow_gt_mini, test_mode=test_mode, dim_indexing='b c h w', mini_batch_size=mini_batch_size))
+                return {
+                    'final': torch.cat([result['final'] for result in results], dim=0),
+                    'flow': [torch.cat([result['flow'][i] for result in results], dim=0) for i in range(iters)],
+                    'info': [torch.cat([result['info'][i] for result in results], dim=0) for i in range(iters)],
+                    'nf': None if test_mode else [torch.cat([result['nf'][i] for result in results], dim=0) for i in range(iters)]
+                }
+
+            if flow_gt is None:
+                flow_gt = torch.zeros(N, 2, H, W, device=image1.device)
+
+            image1 = 2 * (image1 / 255.0) - 1.0
+            image2 = 2 * (image2 / 255.0) - 1.0
+            image1 = image1.contiguous()
+            image2 = image2.contiguous()
+            flow_predictions = []
+            info_predictions = []
+
+            # padding
+            padder = InputPadder(image1.shape)
+            image1, image2 = padder.pad(image1, image2)
+            N, _, H, W = image1.shape
+            dilation = torch.ones(N, 1, H//8, W//8, device=image1.device)
+            # run the context network
+            cnet = self.cnet(torch.cat([image1, image2], dim=1))
+            cnet = self.init_conv(cnet)
+            net, context = torch.split(cnet, [self.args.dim, self.args.dim], dim=1)
+
+            # init flow
             flow_update = self.flow_head(net)
             weight_update = .25 * self.upsample_weight(net)
-            flow_8x = flow_8x + flow_update[:, :2]
+            flow_8x = flow_update[:, :2]
             info_8x = flow_update[:, 2:]
-            # upsample predictions
             flow_up, info_up = self.upsample_data(flow_8x, info_8x, weight_update)
             flow_predictions.append(flow_up)
             info_predictions.append(info_up)
+                
+            if self.args.iters > 0:
+                # run the feature network
+                fmap1_8x = self.fnet(image1)
+                fmap2_8x = self.fnet(image2)
+                corr_fn = CorrBlock(fmap1_8x, fmap2_8x, self.args)
 
-        for i in range(len(info_predictions)):
-            flow_predictions[i] = padder.unpad(flow_predictions[i])
-            info_predictions[i] = padder.unpad(info_predictions[i])
+            for itr in range(iters):
+                N, _, H, W = flow_8x.shape
+                flow_8x = flow_8x.detach()
+                coords2 = (coords_grid(N, H, W, device=image1.device) + flow_8x).detach()
+                corr = corr_fn(coords2, dilation=dilation)
+                net = self.update_block(net, context, corr, flow_8x)
+                flow_update = self.flow_head(net)
+                weight_update = .25 * self.upsample_weight(net)
+                flow_8x = flow_8x + flow_update[:, :2]
+                info_8x = flow_update[:, 2:]
+                # upsample predictions
+                flow_up, info_up = self.upsample_data(flow_8x, info_8x, weight_update)
+                flow_predictions.append(flow_up)
+                info_predictions.append(info_up)
 
-        if test_mode == False:
-            # exlude invalid pixels and extremely large diplacements
-            nf_predictions = []
             for i in range(len(info_predictions)):
-                if not self.args.use_var:
-                    var_max = var_min = 0
-                else:
-                    var_max = self.args.var_max
-                    var_min = self.args.var_min
-                    
-                raw_b = info_predictions[i][:, 2:]
-                log_b = torch.zeros_like(raw_b)
-                weight = info_predictions[i][:, :2]
-                # Large b Component
-                log_b[:, 0] = torch.clamp(raw_b[:, 0], min=0, max=var_max)
-                # Small b Component
-                log_b[:, 1] = torch.clamp(raw_b[:, 1], min=var_min, max=0)
-                # term2: [N, 2, m, H, W]
-                term2 = ((flow_gt - flow_predictions[i]).abs().unsqueeze(2)) * (torch.exp(-log_b).unsqueeze(1))
-                # term1: [N, m, H, W]
-                term1 = weight - math.log(2) - log_b
-                nf_loss = torch.logsumexp(weight, dim=1, keepdim=True) - torch.logsumexp(term1.unsqueeze(1) - term2, dim=2)
-                nf_predictions.append(nf_loss)
+                flow_predictions[i] = padder.unpad(flow_predictions[i])
+                info_predictions[i] = padder.unpad(info_predictions[i])
 
-            return {'final': flow_predictions[-1], 'flow': flow_predictions, 'info': info_predictions, 'nf': nf_predictions}
-        else:
-            return {'final': flow_predictions[-1], 'flow': flow_predictions, 'info': info_predictions, 'nf': None}
+            if test_mode == False:
+                # exlude invalid pixels and extremely large diplacements
+                nf_predictions = []
+                for i in range(len(info_predictions)):
+                    if not self.args.use_var:
+                        var_max = var_min = 0
+                    else:
+                        var_max = self.args.var_max
+                        var_min = self.args.var_min
+                        
+                    raw_b = info_predictions[i][:, 2:]
+                    log_b = torch.zeros_like(raw_b)
+                    weight = info_predictions[i][:, :2]
+                    # Large b Component
+                    log_b[:, 0] = torch.clamp(raw_b[:, 0], min=0, max=var_max)
+                    # Small b Component
+                    log_b[:, 1] = torch.clamp(raw_b[:, 1], min=var_min, max=0)
+                    # term2: [N, 2, m, H, W]
+                    term2 = ((flow_gt - flow_predictions[i]).abs().unsqueeze(2)) * (torch.exp(-log_b).unsqueeze(1))
+                    # term1: [N, m, H, W]
+                    term1 = weight - math.log(2) - log_b
+                    nf_loss = torch.logsumexp(weight, dim=1, keepdim=True) - torch.logsumexp(term1.unsqueeze(1) - term2, dim=2)
+                    nf_predictions.append(nf_loss)
+
+                return {'final': flow_predictions[-1], 'flow': flow_predictions, 'info': info_predictions, 'nf': nf_predictions}
+            else:
+                return {'final': flow_predictions[-1], 'flow': flow_predictions, 'info': info_predictions, 'nf': None}
