@@ -70,7 +70,7 @@ def forward_interpolate(flow):
 def bilinear_sampler(img, coords, mode='bilinear', mask=False):
     """ Wrapper for grid_sample, uses pixel coordinates """
     H, W = img.shape[-2:]
-    xgrid, ygrid = coords.split([1,1], dim=-1)
+    xgrid, ygrid = coords.to(dtype=img.dtype, device=img.device, non_blocking=True).split([1,1], dim=-1)
     xgrid = 2*xgrid/(W-1) - 1
     ygrid = 2*ygrid/(H-1) - 1
 
@@ -79,13 +79,13 @@ def bilinear_sampler(img, coords, mode='bilinear', mask=False):
 
     if mask:
         mask = (xgrid > -1) & (ygrid > -1) & (xgrid < 1) & (ygrid < 1)
-        return img, mask.float()
+        return img, mask.to(dtype=img.dtype)
 
     return img
 
-def coords_grid(batch, ht, wd, device):
+def coords_grid(batch, ht, wd, device, dtype):
     coords = torch.meshgrid(torch.arange(ht, device=device), torch.arange(wd, device=device), indexing='ij')
-    coords = torch.stack(coords[::-1], dim=0).float()
+    coords = torch.stack(coords[::-1], dim=0).to(dtype=dtype)
     return coords[None].repeat(batch, 1, 1, 1)
 
 
@@ -128,10 +128,10 @@ def check_cycle_consistency(flow_01, flow_10):
     flow_01 = torch.from_numpy(flow_01).permute(2, 0, 1)[None]
     flow_10 = torch.from_numpy(flow_10).permute(2, 0, 1)[None]
     H, W = flow_01.shape[-2:]
-    coords = coords_grid(1, H, W, flow_01.device)
+    coords = coords_grid(1, H, W, device=flow_01.device, dtype=flow_01.dtype)
     coords1 = coords + flow_01
     flow_reprojected = bilinear_sampler(flow_10, coords1.permute(0, 2, 3, 1))
     cycle = flow_reprojected + flow_01
     cycle = torch.norm(cycle, dim=1)
-    mask = (cycle < 0.1 * min(H, W)).float()
+    mask = (cycle < 0.1 * min(H, W)).to(flow_01.dtype)
     return mask[0].numpy()

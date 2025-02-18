@@ -15,7 +15,7 @@ def coords_feature(fmap, b, x, y):
     b = b.long()
     x = torch.clamp(x, 0, W-1).long()
     y = torch.clamp(y, 0, H-1).long()
-    res = fmap[b, :, y, x] * mask.float().unsqueeze(1)
+    res = fmap[b, :, y, x] * mask.to(fmap.dtype).unsqueeze(1)
     return res
 
 def bilinear_sampling(fmap, coords):
@@ -40,7 +40,7 @@ def coords_corr(corr, idx, b, x, y):
     idx = idx.long()
     x = torch.clamp(x, 0, W-1).long()
     y = torch.clamp(y, 0, H-1).long()
-    res = corr[b, idx[:, 2], idx[:, 1], y, x] * mask.float()
+    res = corr[b, idx[:, 2], idx[:, 1], y, x] * mask.to(corr.dtype)
     print(mask.requires_grad, x.requires_grad, y.requires_grad, res.requires_grad)
     return res
 
@@ -91,8 +91,9 @@ class CorrBlock:
         for i in range(self.num_levels):
             corr = self.corr_pyramid[i]
             device = coords.device
-            dx = torch.linspace(-r, r, 2*r+1, device=device)
-            dy = torch.linspace(-r, r, 2*r+1, device=device)
+            dtype = coords.dtype
+            dx = torch.linspace(-r, r, 2*r+1, device=device, dtype=dtype)
+            dy = torch.linspace(-r, r, 2*r+1, device=device, dtype=dtype)
             delta = torch.stack(torch.meshgrid(dy, dx, indexing='ij'), axis=-1)
             delta_lvl = delta.view(1, 2*r+1, 2*r+1, 2)
             delta_lvl = delta_lvl * dilation.view(batch * h1 * w1, 1, 1, 1)
@@ -103,7 +104,7 @@ class CorrBlock:
             out_pyramid.append(corr)
 
         out = torch.cat(out_pyramid, dim=-1)
-        out = out.permute(0, 3, 1, 2).contiguous().float()  
+        out = out.permute(0, 3, 1, 2).contiguous()
         return out
 
     @staticmethod
@@ -114,7 +115,7 @@ class CorrBlock:
         fmap2 = fmap2.view(batch, num_head, dim // num_head, h2*w2) 
         corr = fmap1.transpose(2, 3) @ fmap2
         corr = corr.reshape(batch, num_head, h1, w1, h2, w2).permute(0, 2, 3, 1, 4, 5)
-        return corr  / torch.sqrt(torch.tensor(dim).float())
+        return corr  / torch.sqrt(torch.tensor(dim).to(fmap1.dtype))
 
 # class CorrBlock:
 #     def __init__(self, context, fmap1, fmap2, args):

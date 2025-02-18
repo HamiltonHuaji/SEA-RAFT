@@ -85,8 +85,8 @@ class RAFT(
     def initialize_flow(self, img):
         """ Flow is represented as difference between two coordinate grids flow = coords2 - coords1"""
         N, C, H, W = img.shape
-        coords1 = coords_grid(N, H//8, W//8, device=img.device)
-        coords2 = coords_grid(N, H//8, W//8, device=img.device)
+        coords1 = coords_grid(N, H//8, W//8, device=img.device, dtype=img.dtype)
+        coords2 = coords_grid(N, H//8, W//8, device=img.device, dtype=img.dtype)
         return coords1, coords2
 
     def upsample_data(self, flow, info, mask):
@@ -131,14 +131,23 @@ class RAFT(
                     image1_mini = image1[i:i+mini_batch_size]
                     image2_mini = image2[i:i+mini_batch_size]
                     flow_gt_mini = None if flow_gt is None else flow_gt[i:i+mini_batch_size]
-
-                    results.append(self(image1_mini, image2_mini, iters=iters, flow_gt=flow_gt_mini, test_mode=test_mode, dim_indexing='b c h w', mini_batch_size=mini_batch_size))
-                return {
-                    'final': torch.cat([result['final'] for result in results], dim=0),
-                    'flow': [torch.cat([result['flow'][i] for result in results], dim=0) for i in range(iters)],
-                    'info': [torch.cat([result['info'][i] for result in results], dim=0) for i in range(iters)],
-                    'nf': None if test_mode else [torch.cat([result['nf'][i] for result in results], dim=0) for i in range(iters)]
-                }
+                    if test_mode:
+                        results.append({
+                            'final': self(image1_mini, image2_mini, iters=iters, flow_gt=flow_gt_mini, test_mode=test_mode, dim_indexing='b c h w', mini_batch_size=mini_batch_size)['final']
+                        })
+                    else:
+                        results.append(self(image1_mini, image2_mini, iters=iters, flow_gt=flow_gt_mini, test_mode=test_mode, dim_indexing='b c h w', mini_batch_size=mini_batch_size))
+                if test_mode:
+                    return {
+                        'final': torch.cat([result['final'] for result in results], dim=0),
+                    }
+                else:
+                    return {
+                        'final': torch.cat([result['final'] for result in results], dim=0),
+                        'flow': [torch.cat([result['flow'][i] for result in results], dim=0) for i in range(iters)],
+                        'info': [torch.cat([result['info'][i] for result in results], dim=0) for i in range(iters)],
+                        'nf': None if test_mode else [torch.cat([result['nf'][i] for result in results], dim=0) for i in range(iters)]
+                    }
 
             if flow_gt is None:
                 flow_gt = torch.zeros(N, 2, H, W, device=image1.device)
@@ -178,7 +187,7 @@ class RAFT(
             for itr in range(iters):
                 N, _, H, W = flow_8x.shape
                 flow_8x = flow_8x.detach()
-                coords2 = (coords_grid(N, H, W, device=image1.device) + flow_8x).detach()
+                coords2 = (coords_grid(N, H, W, device=image1.device, dtype=image1.dtype) + flow_8x).detach()
                 corr = corr_fn(coords2, dilation=dilation)
                 net = self.update_block(net, context, corr, flow_8x)
                 flow_update = self.flow_head(net)
